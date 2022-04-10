@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='50' cy='47.2' r='34'%0Afill='transparent' stroke='%23fff' stroke-width='7.5' /%3E%3C/svg%3E"
+      type="image/svg+xml"
+    />
+    <title>web</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        --light: #eee;
+        --dark: #222;
+        --color: var(--dark);
+        --background: var(--light);
+        color: var(--color);
+        background: var(--background)
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body:not(.light) {
+          --color: var(--light);
+          --background: var(--dark);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main></main>
+    <script type="module">const dbToFloat = (db)=>10 ** (db / 20)
+;
+
+const fetchAudioBuffer = async (ctx, url)=>{
+    const res = await fetch(url);
+    const arrayBuffer = await res.arrayBuffer();
+    return await ctx.decodeAudioData(arrayBuffer);
+};
+
+const fftLogIndexer = (minFreq, maxFreq, sampleRate, fftSize)=>{
+    const lo = Math.log2(minFreq);
+    const hi = Math.log2(maxFreq);
+    const scale = hi - lo;
+    const nyquist = sampleRate / 2;
+    return (normal)=>{
+        const freq = 2 ** (lo + normal * scale);
+        return freq / nyquist * fftSize | 0;
+    };
+};
+
+const FluentFlags = (cb, flags = {})=>new Proxy(cb, {
+        get (_, prop, receiver) {
+            flags[prop] = true;
+            return receiver;
+        },
+        apply (_, self, args) {
+            const f = {
+                ...flags
+            };
+            flags = {}
+            ;
+            return cb.call(self, f).apply(self, args);
+        }
+    })
+;
+
+function onEvent(el, type, listener, options) {
+    el.addEventListener(type, listener, options);
+    return ()=>off(el, type, listener, options)
+    ;
+}
+ const on = ()=>FluentFlags((flags)=>(el, type, fn, options = {})=>onEvent(el, type, fn, {
+                ...flags.active ? {
+                    passive: false
+                } : null,
+                ...flags,
+                ...options
+            })
+    )
+;
+ const off = (el, type, listener, options)=>el.removeEventListener(type, listener, options)
+;
+
+const accessors = (target, source, fn)=>Object.defineProperties(target, Object.fromEntries(Object.entries(source).map(([key, value])=>{
+        const next = fn(key, value);
+        const prev = Object.getOwnPropertyDescriptor(target, key);
+        if (prev && prev.get && prev.set) {
+            const { get , set  } = next;
+            next.get = ()=>prev.get?.() ?? get()
+            ;
+            next.set = (v)=>{
+                prev.set?.(v);
+                set(prev.get?.() ?? v);
+            };
+        }
+        return [
+            key,
+            {
+                configurable: true,
+                enumerable: true,
+                ...next
+            }
+        ];
+    })))
+;
+
+const Types = new Map([
+    [
+        String,
+        (x)=>x.toString()
+    ],
+    [
+        Number,
+        (x)=>parseFloat(x)
+    ],
+    [
+        Boolean,
+        (x)=>x = x === false ? false : x != null
+    ],
+]);
+const applyProps = (self, data)=>{
+    for (const [key1, value1] of Object.entries(data))if ([
+        String,
+        Number,
+        Boolean
+    ].includes(value1)) data[key1] = void 0;
+    accessors(self, data, (key)=>{
+        const attr = key.toLowerCase();
+        return {
+            get: ()=>data[key]
+            ,
+            set (value) {
+                self.setAttribute(attr, value);
+            }
+        };
+    });
+    return data;
+};
+const attrs = (attrs1)=>(superclass)=>{
+        const types = new Map();
+        const map = new Map();
+        for (const [key2, value] of Object.entries(new attrs1())){
+            const type = value == null ? Types.get(String) : Types.get(value) ?? Types.get(value?.constructor);
+            if (!type) {
+                throw new TypeError(`Attribute "${key2}" is not valid type, must be either: String, Number, Boolean, null, undefined`);
+            }
+            types.set(key2, type);
+            map.set(key2.toLowerCase(), key2);
+        }
+        const observedAttributes = [
+            ...map.keys()
+        ];
+        return class extends superclass {
+            static get observedAttributes() {
+                return observedAttributes.concat(super.observedAttributes ?? []);
+            }
+            #data;
+            constructor(...args){
+                super(...args);
+                this.#data = applyProps(this, new attrs1());
+            }
+            attributeChangedCallback(name, oldValue, newValue) {
+                let key;
+                if (key = map.get(name)) {
+                    const prev = this.#data[key];
+                    const next = types.get(key)(newValue);
+                    if (!Object.is(prev, next)) {
+                        this.#data[key] = next;
+                        this.propertyChangedCallback?.(key, prev, next);
+                    }
+                }
+                super.attributeChangedCallback?.(name, oldValue, newValue);
+            }
+        };
+    }
+;
+
+const Listener = (body)=>new Function('event', `with(this){let fn=${body};return typeof fn=='function'?fn.call(this,event):fn}`)
+;
+const events = ()=>(superclass)=>superclass.prototype.dispatch
+         ? superclass : class extends superclass {
+            dispatchEvent(event) {
+                const onEvent = `on${event.type}`;
+                let fn = this[onEvent];
+                if (!fn) fn = Listener(this.getAttribute(onEvent));
+                const pass = fn.call(this, event);
+                if (pass !== false) super.dispatchEvent(event);
+                return pass;
+            }
+            dispatch(name, detail, init) {
+                return this.dispatchEvent(new CustomEvent(name, {
+                    detail,
+                    ...init
+                }));
+            }
+        }
+;
+
+const lifecycle = ()=>(superclass)=>class extends mixter(superclass, events()) {
+            isMounted = false;
+            connectedCallback() {
+                super.connectedCallback?.();
+                if (!this.isMounted) {
+                    this.isMounted = true;
+                    this.dispatch('mounted');
+                }
+            }
+            disconnectedCallback() {
+                super.disconnectedCallback?.();
+                queueMicrotask(()=>{
+                    if (!this.isConnected) {
+                        this.isMounted = false;
+                        this.dispatch('unmounted');
+                    }
+                });
+            }
+        }
+;
+
+const props = (props1)=>(superclass)=>class extends superclass {
+            constructor(...args){
+                super(...args);
+                Object.assign(this, new props1());
+            }
+        }
+;
+
+const shadow = (init = '', html = '')=>(superclass)=>class extends superclass {
+            root = (()=>{
+                const root = this.attachShadow(typeof init === 'object' ? init : {
+                    mode: 'open'
+                });
+                root.innerHTML = typeof init === 'string' ? init : html;
+                return root;
+            })();
+        }
+;
+
+const argsOf = (x1)=>{
+    const d = x1.indexOf('{') + 1;
+    if (!d || x1.slice(0, d).includes(')')) return [];
+    x1 = x1.slice(d);
+    let match;
+    do {
+        match = false;
+        x1 = x1.replace(/`((\\`)?[^`])+?`|'((\\')?[^'])+?'|"((\\")?[^"])+?"|\([^{[(]*?\)|\{[^{[(]*?\}|\[[^{[(]*?\]/g, ()=>{
+            match = true;
+            return '';
+        });
+    }while (match)
+    return x1.split('}')[0].split(',').map((x)=>x.split(/[^\w\s$]+/g)[0].trim()
+    );
+};
+ const argtor = (fn, keys = new Set())=>(argsOf('' + fn).forEach((x)=>!x || keys.add(x)
+    ), keys)
+;
+
+const create = (target)=>{
+    const NO_DEPS = Symbol();
+    const REDUCER = Symbol();
+    const entries = Object.entries(target);
+    const mem = Object.fromEntries(entries);
+    const register = (f)=>{
+        f.keys = argtor(f.fn);
+        f.keys.forEach((key)=>effects.get(key).push(f)
+        );
+        !f.keys.size && effects.get(NO_DEPS).push(f);
+        f.values = {};
+        return run(f);
+    };
+    const update = (f)=>{
+        f.pass = !f.keys.size;
+        for (const key of f.keys){
+            const value = target[key];
+            if (value == null) {
+                f.pass = false;
+                return;
+            }
+            if (!Object.is(f.values[key], value)) {
+                f.values[key] = value;
+                f.pass = true;
+            }
+        }
+    };
+    const run = (f)=>{
+        update(f);
+        f.dispose?.();
+        if (!f.pass) return;
+        const result = f.fn(f.values);
+        if (f.cb?.(result) === false) return;
+        if (f.target != null) target[f.target] = result;
+        else {
+            if (typeof result === 'function') {
+                f.dispose = ()=>{
+                    result();
+                    f.dispose = null;
+                };
+            }
+        }
+    };
+    const context = {
+        $: {}
+    };
+    const $ = context.$;
+    $.$ = $;
+    accessors(context.$, target, (key)=>({
+            get: ()=>mem[key]
+            ,
+            set (v) {
+                if (v === REDUCER) {
+                    v = reducer.initial;
+                    reducer.target = key;
+                    register(reducer);
+                    if (v == null) return;
+                }
+                target[key] = v;
+            }
+        })
+    );
+    accessors(target, target, (key)=>({
+            get: ()=>mem[key]
+            ,
+            set (v) {
+                if (!Object.is(mem[key], v)) {
+                    mem[key] = v;
+                    effects.get(key).forEach(run);
+                }
+            }
+        })
+    );
+    let reducer;
+    $.reduce = (fn, initial)=>{
+        reducer = {
+            fn,
+            initial
+        };
+        return REDUCER;
+    };
+    $.effect = (fn, cb)=>register({
+            fn,
+            cb
+        })
+    ;
+    let effects;
+    $.cleanup = ()=>{
+        if (effects) {
+            for (const fns of effects.values())fns.forEach((f)=>f.dispose?.()
+            );
+        }
+        effects = new Map([
+            [
+                NO_DEPS,
+                []
+            ],
+            ...entries.map(([key])=>[
+                    key,
+                    []
+                ]
+            ),
+        ]);
+    };
+    $.cleanup();
+    return $;
+};
+const state = (fn)=>(superclass)=>class extends mixter(superclass, lifecycle()) {
+            host = this;
+            constructor(...args){
+                super(...args);
+                const context = create(this);
+                on()(this, 'mounted', ()=>fn.call(this, context)
+                );
+                on()(this, 'unmounted', context.cleanup);
+            }
+        }
+;
+
+function mixter(a, ...mixins) {
+    return mixins.reduce((c, mixin)=>mixin(c)
+    , a);
+}
+
+const style = /*css*/ `
+:host {
+  display: inline-flex;
+  outline: none;
+  user-select: none;
+  touch-action: none;
+}
+
+:host([autoresize]) {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+:host([autoresize]) canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+canvas {
+  image-rendering: pixelated;
+}`;
+class SpectrogramElement extends mixter(HTMLElement, shadow(`<style>${style}</style><canvas></canvas>`), attrs(class {
+    autoResize = true;
+    pixelRatio = window.devicePixelRatio;
+    width = 150;
+    height = 50;
+    background = '#123';
+    color = '#1ff';
+    minFreq = 62;
+    maxFreq = 21000;
+}), props(class {
+    analyser;
+    analyserData = new Float32Array([0]);
+    getFFTLogIndex;
+    renderNextAnimFrame;
+    screen;
+    draw;
+    loop;
+    /**
+     * Start displaying the spectrum.
+     */
+    start() {
+        this.loop?.start();
+    }
+    /**
+     * Stop displaying the spectrum.
+     */
+    stop() {
+        this.loop?.stop();
+    }
+}), state(({ $, effect, reduce }) => {
+    let animFrame;
+    $.screen = reduce(({ root }) => {
+        const canvas = root.querySelector('canvas');
+        const ctx = canvas.getContext('2d', {
+            alpha: false,
+            desynchronized: true,
+        });
+        return { canvas, ctx };
+    });
+    effect(({ screen: { canvas, ctx }, background, width, height, pixelRatio }) => {
+        const w = width * pixelRatio | 0;
+        const h = height * pixelRatio | 0;
+        if (w !== canvas.width || h !== canvas.height) {
+            canvas.width = w;
+            canvas.height = h;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+            ctx.fillStyle = background;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+    });
+    $.analyserData = reduce(({ analyser }) => new Float32Array(analyser.frequencyBinCount));
+    $.getFFTLogIndex = reduce(({ analyser, minFreq, maxFreq }) => fftLogIndexer(minFreq, maxFreq, analyser.context.sampleRate, analyser.frequencyBinCount));
+    $.draw = reduce(({ analyser, analyserData, screen: { canvas, ctx }, pixelRatio, getFFTLogIndex }) => {
+        cancelAnimationFrame(animFrame);
+        return function draw() {
+            animFrame = requestAnimationFrame(draw);
+            analyser.getFloatFrequencyData(analyserData);
+            ctx.drawImage(ctx.canvas, 0, -1, canvas.width, canvas.height);
+            for (let i = 0; i < canvas.width; i++) {
+                const ni = i / canvas.width;
+                const index = getFFTLogIndex(ni);
+                const db = analyserData[index];
+                const n = dbToFloat(db);
+                const val = Math.tanh((n ** 0.55) * 8.5);
+                if (!isFinite(val))
+                    return;
+                const h = (150 + (100 - 100 * val)) | 0;
+                const s = (40 + 50 * val) | 0;
+                const l = (15 + 55 * val) | 0;
+                ctx.fillStyle = `hsl(${h},${s}%,${l}%)`;
+                ctx.fillRect(i, canvas.height - 1, i + pixelRatio, 1);
+            }
+        };
+    });
+    $.loop = reduce(({ draw }) => ({
+        start() {
+            animFrame = requestAnimationFrame(draw);
+        },
+        stop() {
+            cancelAnimationFrame(animFrame);
+        },
+    }));
+    effect(({ loop }) => {
+        loop.start();
+        return () => loop.stop();
+    });
+})) {
+}
+
+customElements.define('x-spectrogram', SpectrogramElement);
+document.body.innerHTML = `
+<div id="demo" style="display:inline-flex;height:80px;">
+  <x-spectrogram autoresize></x-spectrogram>
+</div>
+`;
+const ctx = new AudioContext({ sampleRate: 44100, latencyHint: 'playback' });
+const analyser = ctx.createAnalyser();
+analyser.fftSize = 4096;
+analyser.smoothingTimeConstant = 0;
+analyser.maxDecibels = 0;
+analyser.minDecibels = -100;
+// @ts-ignore
+const url = new URL('alpha_molecule.ogg', import.meta.url).toString();
+fetchAudioBuffer(ctx, url).then(audioBuffer => {
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.loop = true;
+    source.connect(ctx.destination);
+    source.start(0, 30);
+    source.connect(analyser);
+    document.querySelector('x-spectrogram').analyser = analyser;
+});
+window.onclick = () => ctx.state !== 'running' ? ctx.resume() : ctx.suspend();
+if (ctx.state !== 'running')
+    document.body.appendChild(new Text('click to start/stop'));
+</script>
+  </body>
+</html>
