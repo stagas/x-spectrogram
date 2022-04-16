@@ -1,5 +1,5 @@
 <h1>
-x-spectrogram <a href="https://npmjs.org/package/x-spectrogram"><img src="https://img.shields.io/badge/npm-v1.0.0-F00.svg?colorA=000"/></a> <a href="src"><img src="https://img.shields.io/badge/loc-126-FFF.svg?colorA=000"/></a> <a href="https://cdn.jsdelivr.net/npm/x-spectrogram@1.0.0/dist/x-spectrogram.min.js"><img src="https://img.shields.io/badge/brotli-2.4K-333.svg?colorA=000"/></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-F0B.svg?colorA=000"/></a>
+x-spectrogram <a href="https://npmjs.org/package/x-spectrogram"><img src="https://img.shields.io/badge/npm-v1.0.1-F00.svg?colorA=000"/></a> <a href="src"><img src="https://img.shields.io/badge/loc-126-FFF.svg?colorA=000"/></a> <a href="https://cdn.jsdelivr.net/npm/x-spectrogram@1.0.1/dist/x-spectrogram.min.js"><img src="https://img.shields.io/badge/brotli-2.5K-333.svg?colorA=000"/></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-F0B.svg?colorA=000"/></a>
 </h1>
 
 <p></p>
