@@ -1,5 +1,5 @@
 import { fetchAudioBuffer } from 'webaudio-tools'
-import { SpectrogramElement } from '../src'
+import { SpectrogramElement } from '../dist/esm'
 
 customElements.define('x-spectrogram', SpectrogramElement)
 document.body.innerHTML = `

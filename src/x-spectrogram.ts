@@ -1,5 +1,4 @@
-import { attrs, mixter, props, shadow, state } from 'mixter'
-import { dbToFloat, fftLogIndexer } from 'webaudio-tools'
+import $ from 'sigl'
 
 const style = /*css*/ `
 :host {
@@ -24,134 +23,122 @@ canvas {
   image-rendering: pixelated;
 }`
 
-export class SpectrogramElement extends mixter(
-  HTMLElement,
-  shadow(`<style>${style}</style><canvas></canvas>`),
-  attrs(
-    class {
-      autoResize = false
-      pixelRatio = window.devicePixelRatio
+export interface SpectrogramElement extends $.Element<SpectrogramElement> {}
 
-      width = 150
-      height = 50
+@$.element()
+export class SpectrogramElement extends HTMLElement {
+  root = $.shadow(this, /*html*/ `<style>${style}</style><canvas></canvas>`)
 
-      background = '#123'
-      color = '#1ff'
+  @$.attr() autoResize = false
+  @$.attr() pixelRatio = window.devicePixelRatio
 
-      minFreq = 62
-      maxFreq = 21000
-    }
-  ),
-  props(
-    class {
-      analyser?: AnalyserNode
-      /** @private */
-      analyserData = new Float32Array([0])
-      /** @private */
-      getFFTLogIndex?: (normal: number) => number
-      /** @private */
-      renderNextAnimFrame?: () => void
-      /** @private */
-      screen?: {
-        canvas: HTMLCanvasElement
-        ctx: CanvasRenderingContext2D
-      }
-      /** @private */
-      draw?: () => void
-      /** @private */
-      loop?: {
-        start(): void
-        stop(): void
-      }
-      /**
-       * Start displaying the spectrum.
-       */
-      start() {
-        this.loop?.start()
-      }
-      /**
-       * Stop displaying the spectrum.
-       */
-      stop() {
-        this.loop?.stop()
-      }
-    }
-  ),
-  state<SpectrogramElement>(({ $, effect, reduce }) => {
+  @$.attr() width = 150
+  @$.attr() height = 50
+
+  @$.attr() background = '#123'
+  @$.attr() color = '#1ff'
+
+  @$.attr() minFreq = 62
+  @$.attr() maxFreq = 21000
+
+  // @ts-ignore
+  workerUrl = new URL('./x-spectrogram-worker.js', import.meta.url).href
+  worker: Worker | null = new Worker(this.workerUrl, { type: 'module' })
+  workerData?: Float32Array // = new Float32Array([0])
+
+  analyser?: AnalyserNode
+  analyserData = new Float32Array([0])
+  getFFTLogIndex?: (normal: number) => number
+  renderNextAnimFrame?: () => void
+  canvas?: HTMLCanvasElement
+  // screen?: {
+  //   canvas: HTMLCanvasElement
+  //   ctx: CanvasRenderingContext2D
+  // }
+  draw?: () => void
+  loop?: {
+    start(): void
+    stop(): void
+  }
+  /**
+   * Start displaying the spectrum.
+   */
+  start() {
+    this.loop?.start()
+  }
+  /**
+   * Stop displaying the spectrum.
+   */
+  stop() {
+    this.loop?.stop()
+  }
+
+  destroy = $(this).reduce(({ worker }) => () => worker.terminate())
+
+  mounted($: SpectrogramElement['$']) {
     let animFrame: any
 
-    $.screen = reduce(({ root }) => {
-      const canvas = root.querySelector('canvas')!
-      const ctx = canvas.getContext('2d', {
-        alpha: false,
-        desynchronized: true,
-      })!
-      return { canvas, ctx }
+    $.effect(({ root, worker }) => {
+      if ($.canvas) return
+
+      const canvas = $.canvas = root.querySelector('canvas') as HTMLCanvasElement
+
+      // @ts-ignore
+      const offscreen = canvas.transferControlToOffscreen()
+
+      worker.postMessage({ canvas: offscreen }, [offscreen])
     })
 
-    effect(({ screen: { canvas, ctx }, background, width, height, pixelRatio }) => {
-      const w = width * pixelRatio | 0
-      const h = height * pixelRatio | 0
-      if (w !== canvas.width || h !== canvas.height) {
-        canvas.width = w
-        canvas.height = h
-        canvas.style.width = width + 'px'
-        canvas.style.height = height + 'px'
-        ctx.fillStyle = background
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-      }
+    $.effect(({ worker, canvas, background, width, height, pixelRatio }) => {
+      canvas.style.width = width + 'px'
+      canvas.style.height = height + 'px'
+
+      worker.postMessage({
+        pixelRatio,
+        width,
+        height,
+        background,
+      })
     })
 
-    $.analyserData = reduce(({ analyser }) => new Float32Array(analyser.frequencyBinCount))
+    $.analyserData = $.reduce(({ analyser }) => new Float32Array(analyser.frequencyBinCount))
+    $.workerData = $.reduce(({ analyser }) => new Float32Array(new SharedArrayBuffer(analyser.frequencyBinCount * 4)))
 
-    $.getFFTLogIndex = reduce(({ analyser, minFreq, maxFreq }) =>
-      fftLogIndexer(
+    $.draw = $.reduce(({ analyser, analyserData, workerData, minFreq, maxFreq, worker }) => {
+      cancelAnimationFrame(animFrame)
+
+      worker.postMessage({
+        analyserData: workerData,
         minFreq,
         maxFreq,
-        analyser.context.sampleRate,
-        analyser.frequencyBinCount
-      )
-    )
+        sampleRate: analyser.context.sampleRate,
+        frequencyBinCount: analyser.frequencyBinCount,
+      })
 
-    $.draw = reduce(({ analyser, analyserData, screen: { canvas, ctx }, pixelRatio, getFFTLogIndex }) => {
-      cancelAnimationFrame(animFrame)
       return function draw() {
         animFrame = requestAnimationFrame(draw)
+
+        // NOTE: it's a pity we can't write directly to the
+        // shared buffer and we have to perform a copy
         analyser.getFloatFrequencyData(analyserData)
-
-        ctx.drawImage(ctx.canvas, 0, -1, canvas.width, canvas.height)
-
-        for (let i = 0; i < canvas.width; i++) {
-          const ni = i / canvas.width
-          const index = getFFTLogIndex(ni)
-          const db = analyserData[index]
-          const n = dbToFloat(db)
-          const val = Math.tanh((n ** 0.55) * 8.5)
-
-          if (!isFinite(val)) return
-
-          const h = (150 + (100 - 100 * val)) | 0
-          const s = (40 + 50 * val) | 0
-          const l = (15 + 55 * val) | 0
-
-          ctx.fillStyle = `hsl(${h},${s}%,${l}%)`
-          ctx.fillRect(i, canvas.height - 1, i + pixelRatio, 1)
-        }
+        workerData.set(analyserData)
       }
     })
 
-    $.loop = reduce(({ draw }) => ({
+    $.loop = $.reduce(({ draw, worker }) => ({
       start() {
         animFrame = requestAnimationFrame(draw)
+        worker.postMessage({ start: true })
       },
       stop() {
         cancelAnimationFrame(animFrame)
+        worker.postMessage({ stop: true })
       },
     }))
 
-    effect(({ loop }) => {
+    $.effect(({ loop }) => {
       loop.start()
       return () => loop.stop()
     })
-  })
-) {}
+  }
+}
